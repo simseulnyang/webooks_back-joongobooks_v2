@@ -46,11 +46,21 @@ class Book(models.Model):
     
     def __str__(self):
         return f"책 제목 : {self.title} / 책 저자 : {self.author} / 책 상태 : {self.condition} / 판매자: {self.writer} / 판매가격 {self.selling_price}"
+
+    def like_count(self):
+        """좋아요 개수 반환"""
+        return self.favorites.count()
+    
+    def is_liked_by(self, user):
+        """특정 사용자가 좋아요를 눌렀는지 여부 반환"""
+        if user.is_authenticated:
+            return self.favorites.filter(user=user).exists()
+        return False
     
     
 class Favorite(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='favorites', verbose_name='사용자')
-    book = models.ForeignKey(Book, on_delete=models.CASCADE, related_name='favorited_by', verbose_name='책')
+    book = models.ForeignKey(Book, on_delete=models.CASCADE, related_name='favorites', verbose_name='책')
     created_at = models.DateTimeField(auto_now_add=True)
     
     
