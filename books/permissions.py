@@ -1,7 +1,7 @@
-from rest_framework import permissions
+from rest_framework.permissions import BasePermission, SAFE_METHODS
 
 
-class IsOwnerOrReadOnly(permissions.BasePermission):
+class IsOwnerOrReadOnly(BasePermission):
     """
     객체의 소유자만 수정/삭제 가능
     
@@ -10,28 +10,18 @@ class IsOwnerOrReadOnly(permissions.BasePermission):
     """
     
     def has_object_permission(self, request, view, obj):
-        if request.method in permissions.SAFE_METHODS:
-            if hasattr(obj, 'is_public') and obj.is_public:
-                return True
-            if hasattr(obj, 'user'):
-                return obj.user == request.user
+        # 읽기 권한은 모두에게
+        if request.method in SAFE_METHODS:
             return True
         
         # 쓰기 권한은 소유자만
-        if hasattr(obj, 'user'):
-            return obj.user == request.user
-        
-        return False
+        return obj.writer == request.user
 
 
-class IsOwner(permissions.BasePermission):
+class IsOwner(BasePermission):
     """
     객체의 소유자만 모든 작업 가능
     """
     
     def has_object_permission(self, request, view, obj):
-        if hasattr(obj, 'user'):
-            return obj.user == request.user
-        if hasattr(obj, 'trip'):
-            return obj.trip.user == request.user
-        return False
+        return obj.writer == request.user

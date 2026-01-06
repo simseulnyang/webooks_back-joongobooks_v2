@@ -228,7 +228,7 @@ class FavoriteListView(APIView):
         },
     )
     def get(self, request: Request) -> Response:
-        favorite = Favorite.objects.filter(user=request.user).selected_related('book')
+        favorite = Favorite.objects.filter(user=request.user).prefetch_related('book')
         
         pagination = BookPagination()
         paginated_favorites = pagination.paginate_queryset(favorite, request)
