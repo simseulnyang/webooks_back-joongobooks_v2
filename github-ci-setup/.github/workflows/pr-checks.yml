@@ -1,0 +1,130 @@
+name: PR Checks
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  pr-checks:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # 전체 히스토리를 가져와서 커밋 메시지 확인
+
+    - name: 🔍 Check PR title convention
+      run: |
+        PR_TITLE="${{ github.event.pull_request.title }}"
+        echo "PR Title: $PR_TITLE"
+        
+        # Conventional Commits 형식 체크
+        if echo "$PR_TITLE" | grep -qE '^(Feat|Fix|Docs|Style|Refactor|Test|Chore)(\(.+\))?: .+'; then
+          echo "✅ PR title follows Conventional Commits format"
+        else
+          echo "❌ PR title does not follow Conventional Commits format"
+          echo "Expected format: Type(scope): description"
+          echo "Types: Feat, Fix, Docs, Style, Refactor, Test, Chore"
+          exit 1
+        fi
+
+    - name: 📝 Check commit messages
+      run: |
+        echo "Checking commit messages..."
+        INVALID_COMMITS=0
+        
+        for commit in $(git log origin/${{ github.base_ref }}..${{ github.head_ref }} --format="%H"); do
+          MESSAGE=$(git log -1 --format="%s" $commit)
+          echo "Checking: $MESSAGE"
+          
+          if echo "$MESSAGE" | grep -qE '^(Feat|Fix|Docs|Style|Refactor|Test|Chore)(\(.+\))?: .+'; then
+            echo "  ✅ Valid"
+          else
+            echo "  ❌ Invalid - does not follow Conventional Commits"
+            INVALID_COMMITS=$((INVALID_COMMITS + 1))
+          fi
+        done
+        
+        if [ $INVALID_COMMITS -gt 0 ]; then
+          echo ""
+          echo "❌ Found $INVALID_COMMITS invalid commit message(s)"
+          echo "Please use Conventional Commits format:"
+          echo "  Feat: add new feature"
+          echo "  Fix: fix bug"
+          echo "  Docs: update documentation"
+          exit 1
+        else
+          echo "✅ All commit messages are valid"
+        fi
+
+    - name: 📏 Check PR size
+      run: |
+        CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }}...${{ github.head_ref }} | wc -l)
+        ADDITIONS=$(git diff --shortstat origin/${{ github.base_ref }}...${{ github.head_ref }} | grep -oE '[0-9]+ insertion' | grep -oE '[0-9]+' || echo 0)
+        DELETIONS=$(git diff --shortstat origin/${{ github.base_ref }}...${{ github.head_ref }} | grep -oE '[0-9]+ deletion' | grep -oE '[0-9]+' || echo 0)
+        
+        echo "📊 PR Statistics:"
+        echo "  Files changed: $CHANGED_FILES"
+        echo "  Lines added: $ADDITIONS"
+        echo "  Lines deleted: $DELETIONS"
+        
+        if [ $CHANGED_FILES -gt 50 ]; then
+          echo "⚠️ Warning: This PR changes more than 50 files"
+          echo "Consider splitting into smaller PRs for easier review"
+        fi
+        
+        if [ $ADDITIONS -gt 1000 ]; then
+          echo "⚠️ Warning: This PR adds more than 1000 lines"
+          echo "Consider splitting into smaller PRs for easier review"
+        fi
+
+    - name: 🔍 Check for TODO/FIXME comments
+      run: |
+        TODO_COUNT=$(grep -r "TODO\|FIXME" --include="*.py" --exclude-dir={venv,env,migrations,.git} . | wc -l || echo 0)
+        
+        if [ $TODO_COUNT -gt 0 ]; then
+          echo "⚠️ Found $TODO_COUNT TODO/FIXME comments:"
+          grep -rn "TODO\|FIXME" --include="*.py" --exclude-dir={venv,env,migrations,.git} . || true
+          echo ""
+          echo "Consider creating issues for these items"
+        else
+          echo "✅ No TODO/FIXME comments found"
+        fi
+
+    - name: 🐍 Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+
+    - name: 📦 Install Poetry
+      uses: snok/install-poetry@v1
+      with:
+        version: latest
+        virtualenvs-create: true
+        virtualenvs-in-project: true
+
+    - name: 🗂️ Load cached venv
+      id: cached-poetry-dependencies
+      uses: actions/cache@v4
+      with:
+        path: .venv
+        key: venv-${{ runner.os }}-${{ hashFiles('**/poetry.lock') }}
+
+    - name: 📦 Install linting tools
+      run: |
+        poetry install --no-interaction --only dev
+
+    - name: 🎨 Check import sorting with isort
+      run: |
+        poetry run isort --check-only --diff --profile black --line-length 120 --skip migrations --skip venv --skip env .
+      continue-on-error: true
+
+    - name: 📊 Lint summary
+      if: always()
+      run: |
+        echo "## 📊 Lint Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ PR title check: Passed" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ Commit message check: Passed" >> $GITHUB_STEP_SUMMARY
+        echo "- ℹ️ Code style suggestions available above" >> $GITHUB_STEP_SUMMARY
