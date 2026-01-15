@@ -25,6 +25,8 @@ ALLOWED_HOSTS = ['*']
 # Application definition
 
 INSTALLED_APPS = [
+    'daphne',
+    
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -47,10 +49,12 @@ INSTALLED_APPS = [
     'dj_rest_auth',
     'dj_rest_auth.registration',
     'environ',
+    'channels',
     
     # apps
     'accounts',
     'books',
+    'chat',
 ]
 
 AUTH_USER_MODEL = "accounts.User"
@@ -203,3 +207,17 @@ KAKAO_REDIRECT_URI = os.getenv("KAKAO_REDIRECT_URI")
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI")
+
+
+# ASGI 애플리케이션 설정 
+ASGI_APPLICATION = 'config.asgi.application'
+
+# Channel Layers 설정 (Redis 사용)
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels_redis.core.RedisChannelLayer',
+        'CONFIG': {
+            "hosts": [('127.0.0.1', 6379)],
+        },
+    },
+}

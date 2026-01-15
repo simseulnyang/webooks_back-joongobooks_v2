@@ -9,6 +9,7 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/users/', include("accounts.urls")),
     path('api/books/', include("books.urls")),
+    path('api/chat/', include("chat.urls")),
     
     # OpenAPI 스키마(JSON)
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
