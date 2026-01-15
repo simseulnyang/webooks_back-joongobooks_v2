@@ -1,5 +1,14 @@
 from django.urls import path
-from books.views import BookListView, BookDetailView, BookCreateView, BookUpdateView, BookDeleteView, FavoriteToggleView, FavoriteListView
+
+from books.views import (
+    BookCreateView,
+    BookDeleteView,
+    BookDetailView,
+    BookListView,
+    BookUpdateView,
+    FavoriteListView,
+    FavoriteToggleView,
+)
 
 urlpatterns = [
     path(route="", view=BookListView.as_view(), name="book-list"),
@@ -7,7 +16,6 @@ urlpatterns = [
     path(route="create/", view=BookCreateView.as_view(), name="book-create"),
     path(route="update/<int:book_id>/", view=BookUpdateView.as_view(), name="book-update"),
     path(route="delete/<int:book_id>/", view=BookDeleteView.as_view(), name="book-delete"),
-    
-    path(route='<int:book_id>/favorite/', view=FavoriteToggleView.as_view(), name='favorite-toggle'),
-    path(route='favorites/', view=FavoriteListView.as_view(), name='favorite-list'),
+    path(route="<int:book_id>/favorite/", view=FavoriteToggleView.as_view(), name="favorite-toggle"),
+    path(route="favorites/", view=FavoriteListView.as_view(), name="favorite-list"),
 ]

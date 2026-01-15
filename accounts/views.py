@@ -1,29 +1,32 @@
 # accounts/views.py
-import requests
 import logging
+
 from django.conf import settings
 from django.http import HttpResponse
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status
-from rest_framework_simplejwt.tokens import RefreshToken
-from drf_spectacular.utils import extend_schema, OpenApiExample
 
-from .models import User, SocialAccount
+import requests
+from drf_spectacular.utils import OpenApiExample, extend_schema
+from rest_framework import status
+from rest_framework.response import Response
+from rest_framework.views import APIView
+from rest_framework_simplejwt.tokens import RefreshToken
+
+from .models import SocialAccount, User
 from .serializers import (
     SocialLoginRequestSerializer,
     SocialLoginResponseSerializer,
     UserSerializer,
 )
 
+
 #! 추후에 Flutter 진행 시 삭제해야 할 코드 (callback은 front에서 진행하는 것)
 def callback_view(request):
     code = request.GET.get("code")
     error = request.GET.get("error")
-    
+
     if error:
         return HttpResponse(f"kakao Login Error: {error}")
-    
+
     return HttpResponse(f"kakao Authorization code: {code}")
 
 
@@ -65,8 +68,8 @@ class KakaoLoginAPIView(APIView):
         serializer = SocialLoginRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         code = serializer.validated_data["code"]
-        
-        # 2) 카카오 토큰/프로필 요청 
+
+        # 2) 카카오 토큰/프로필 요청
         kakao_rest_api_key = settings.KAKAO_REST_API_KEY
         kakao_client_secret = settings.KAKAO_CLIENT_SECRET
         kakao_redirect_uri = settings.KAKAO_REDIRECT_URI
@@ -80,7 +83,7 @@ class KakaoLoginAPIView(APIView):
                 "code": code,
             },
         )
-        
+
         logger.error("Kakao token response status: %s", token_res.status_code)
         logger.error("Kakao token response body: %s", token_res.text)
 
@@ -93,9 +96,7 @@ class KakaoLoginAPIView(APIView):
         access_token = token_res.json().get("access_token")
 
         headers = {"Authorization": f"Bearer {access_token}"}
-        profile_res = requests.get(
-            "https://kapi.kakao.com/v2/user/me", headers=headers
-        )
+        profile_res = requests.get("https://kapi.kakao.com/v2/user/me", headers=headers)
 
         if profile_res.status_code != 200:
             return Response(
@@ -146,8 +147,8 @@ class KakaoLoginAPIView(APIView):
 
         output_serializer = SocialLoginResponseSerializer(response_data)
         return Response(output_serializer.data, status=status.HTTP_200_OK)
-    
-    
+
+
 class GoogleLoginAPIView(APIView):
     @extend_schema(
         tags=["Auth - GoogleSocial"],
@@ -182,17 +183,17 @@ class GoogleLoginAPIView(APIView):
     )
     def post(self, request, *args, **kwargs):
         logger = logging.getLogger(__name__)
-        
+
         # 1) 요청 검증
         serializer = SocialLoginRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         code = serializer.validated_data["code"]
-        
+
         # 2) 구글 토큰/프로필 요청
         google_client_id = settings.GOOGLE_CLIENT_ID
         google_client_secret = settings.GOOGLE_CLIENT_SECRET
         google_redirect_uri = settings.GOOGLE_REDIRECT_URI
-        
+
         token_res = requests.post(
             "https://oauth2.googleapis.com/token",
             data={
@@ -200,22 +201,22 @@ class GoogleLoginAPIView(APIView):
                 "client_id": google_client_id,
                 "client_secret": google_client_secret,
                 "redirect_uri": google_redirect_uri,
-                "code": code
+                "code": code,
             },
         )
-        
+
         logger.error("Google token response status: %s", token_res.status_code)
         logger.error("Google token response body: %s", token_res.text)
-        
+
         if token_res.status_code != 200:
             return Response(
                 {"detail": "Failed to obtain access token from Google"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        
+
         token_json = token_res.json()
         access_token = token_json.get("access_token")
-        
+
         if not access_token:
             return Response(
                 {"detail": "Google access token not found in response"},
@@ -228,15 +229,15 @@ class GoogleLoginAPIView(APIView):
             "https://openidconnect.googleapis.com/v1/userinfo",
             headers=headers,
         )
-        
+
         if profile_res.status_code != 200:
             return Response(
                 {"detail": "Google access token not found in response"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-            
+
         profile_json = profile_res.json()
-        
+
         # 구글의 고유 사용자 ID (sub)
         google_oid = profile_json.get("sub")
         email = profile_json.get("email")
@@ -248,7 +249,7 @@ class GoogleLoginAPIView(APIView):
                 {"detail": "Google user info does not contain required fields"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        
+
         # 4) SocialAccount & User 연결 (이메일 같으면 같은 계정으로 묶는 핵심 로직)
         try:
             social = SocialAccount.objects.get(
@@ -259,7 +260,7 @@ class GoogleLoginAPIView(APIView):
             created = False
         except SocialAccount.DoesNotExist:
             user = User.objects.filter(email=email).first()
-            
+
             if user is None:
                 user = User.objects.create(
                     email=email,
@@ -269,21 +270,21 @@ class GoogleLoginAPIView(APIView):
                 created = True
             else:
                 created = False
-                
+
             SocialAccount.objects.create(
                 user=user,
                 provider=SocialAccount.Provider.GOOGLE,
                 provider_user_oid=google_oid,
             )
-        
+
         refresh = RefreshToken.for_user(user)
-        
+
         response_data = {
-            "access_token" : str(refresh.access_token),
-            "refresh_token" : str(refresh),
+            "access_token": str(refresh.access_token),
+            "refresh_token": str(refresh),
             "user": UserSerializer(user).data,
             "is_created": created,
         }
-        
+
         output_serializer = SocialLoginResponseSerializer(response_data)
         return Response(output_serializer.data, status=status.HTTP_200_OK)
