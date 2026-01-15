@@ -69,11 +69,6 @@ jobs:
     - name: 📦 Install project
       run: poetry install --no-interaction
 
-    - name: 🔍 Check code style with flake8
-      run: |
-        poetry run flake8 . --count --max-line-length=120 --statistics --exclude=migrations,venv,env,.git,__pycache__,.pytest_cache
-      continue-on-error: true
-
     - name: 🎨 Check code formatting with black
       run: |
         poetry run black --check --line-length=120 --exclude="migrations|venv|env" .
@@ -110,3 +105,24 @@ jobs:
     - name: ❌ Tests failed
       if: failure()
       run: echo "❌ Some tests failed. Please check the logs."
+
+  code-quality:
+    runs-on: ubuntu-latest
+    continue-on-error: true  # 이 job은 실패해도 OK
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+    
+    - name: Install Poetry
+      uses: snok/install-poetry@v1
+    
+    - name: Install dependencies
+      run: poetry install --with dev
+    
+    - name: Run Flake8
+      run: poetry run flake8 .
