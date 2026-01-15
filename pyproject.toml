@@ -36,5 +36,71 @@ build-backend = "poetry.core.masonry.api"
 dev = [
     "pytest (>=8.4.2,<9.0.0)",
     "pytest-django (>=4.11.1,<5.0.0)",
-    "factory-boy (>=3.3.3,<4.0.0)"
+    "factory-boy (>=3.3.3,<4.0.0)",
+    "black (>=25.12.0,<26.0.0)",
+    "flake8 (>=7.3.0,<8.0.0)",
+    "isort (>=7.0.0,<8.0.0)",
+    "coverage (>=7.13.1,<8.0.0)"
 ]
+
+
+# Black 설정
+[tool.black]
+line-length = 120
+target-version = ['py313']
+exclude = '''
+/(
+    \.git
+  | \.venv
+  | venv
+  | env
+  | migrations
+  | __pycache__
+  | \.pytest_cache
+  | htmlcov
+)/
+'''
+
+# isort 설정
+[tool.isort]
+profile = "black"
+line_length = 120
+skip_gitignore = true
+skip = ["migrations", "venv", "env", ".venv"]
+known_django = ["django"]
+known_first_party = ["config", "accounts", "books", "chat"]
+sections = ["FUTURE", "STDLIB", "DJANGO", "THIRDPARTY", "FIRSTPARTY", "LOCALFOLDER"]
+
+# Coverage 설정
+[tool.coverage.run]
+source = ["."]
+omit = [
+    "*/migrations/*",
+    "*/tests/*",
+    "*/venv/*",
+    "*/env/*",
+    "*/__pycache__/*",
+    "manage.py",
+    "*/wsgi.py",
+    "*/asgi.py",
+    "*/settings.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "class .*\\bProtocol\\):",
+    "@(abc\\.)?abstractmethod",
+]
+
+# Pytest 설정
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "config.settings"
+python_files = ["tests.py", "test_*.py", "*_tests.py", "*_test_*.py"]
+addopts = "-v --tb=short --strict-markers"
+testpaths = ["accounts/tests", "books/tests", "chat/tests"]

@@ -1,0 +1,27 @@
+# .flake8 파일 생성
+cat > .flake8 << 'EOF'
+[flake8]
+max-line-length = 120
+exclude = 
+    .git,
+    __pycache__,
+    */migrations/*,
+    venv,
+    env,
+    .venv,
+    .pytest_cache,
+    htmlcov,
+    *.egg-info,
+    .tox,
+    dist,
+    build
+
+# E501: line too long (handled by black)
+# W503: line break before binary operator (conflicts with black)
+# E203: whitespace before ':' (conflicts with black)
+ignore = E501, W503, E203
+
+per-file-ignores =
+    __init__.py:F401
+    */settings.py:E501
+EOF
