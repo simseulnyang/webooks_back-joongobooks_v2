@@ -2,29 +2,127 @@ name: Django CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ main ]
   pull_request:
-    branches: [ "main" ]
+    branches: [ main ]
 
 jobs:
-  build:
+  test:
+    runs-on: ubuntu-letest
 
-    runs-on: ubuntu-latest
-    strategy:
-      max-parallel: 4
-      matrix:
-        python-version: [3.7, 3.8, 3.9]
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: test_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      SECRET_KEY: test-secret-key-for-ci
+      DB_NAME: test_db
+      DB_USER: test_user
+      DB_PASSWORD: test_password
+      DB_HOST: localhost
+      DB_PORT: 5432
+      KAKAO_REST_API_KEY: test_kakao_key
+      KAKAO_CLIENT_SECRET: test_kakao_secret
+      KAKAO_REDIRECT_URI: http://localhost:8000/api/users/kakao/callback/
+      GOOGLE_CLIENT_ID: test_google_id
+      GOOGLE_CLIENT_SECRET: test_google_secret
+      GOOGLE_REDIRECT_URI: http://localhost:8000/api/users/google/login/callback/
 
     steps:
-    - uses: actions/checkout@v4
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v3
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+
+    - name: 🐍 Set up Python
+      uses: actions/setup-python@v5
       with:
-        python-version: ${{ matrix.python-version }}
-    - name: Install Dependencies
+        python-version: '3.13'
+
+    - name: 📦 Install Poetry
+      uses: snok/install-poetry@v1
+      with:
+        version: latest
+        virtualenvs-create: true
+        virtualenvs-in-project: true
+
+    - name: 🗂️ Load cached venv
+      id: cached-poetry-dependencies
+      uses: actions/cache@v4
+      with:
+        path: .venv
+        key: venv-${{ runner.os }}-${{ hashFiles('**/poetry.lock') }}
+
+    - name: 📦 Install dependencies
+      if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
+      run: poetry install --no-interaction --no-root --with dev
+
+    - name: 📦 Install project
+      run: poetry install --no-interaction
+
+    - name: 🎨 Check code formatting with black
       run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-    - name: Run Tests
+        poetry run black --check --line-length=120 --exclude="migrations|venv|env" .
+      continue-on-error: true
+
+    - name: 📊 Run migrations
       run: |
-        python manage.py test
+        poetry run python manage.py makemigrations
+        poetry run python manage.py migrate
+
+    - name: 🧪 Run tests
+      run: |
+        poetry run python manage.py test
+
+    - name: 📈 Generate coverage report
+      run: |
+        poetry run coverage run --source='.' manage.py test
+        poetry run coverage report
+        poetry run coverage html
+      continue-on-error: true
+
+    - name: 📤 Upload coverage report
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: coverage-report
+        path: htmlcov/
+        retention-days: 30
+
+    - name: ✅ All tests passed
+      if: success()
+      run: echo "✅ All tests passed successfully!"
+
+    - name: ❌ Tests failed
+      if: failure()
+      run: echo "❌ Some tests failed. Please check the logs."
+
+  code-quality:
+    runs-on: ubuntu-latest
+    continue-on-error: true  # 이 job은 실패해도 OK
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+    
+    - name: Install Poetry
+      uses: snok/install-poetry@v1
+    
+    - name: Install dependencies
+      run: poetry install --with dev
+    
+    - name: Run Flake8
+      run: poetry run flake8 .
