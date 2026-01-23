@@ -1,6 +1,13 @@
 from django.urls import include, path
 
-from accounts.views import GoogleLoginAPIView, KakaoLoginAPIView, UserProfileAPIView, UserUpdateAPIView, LogoutAPIView, DeleteAccountAPIView
+from accounts.views import (
+    GoogleLoginAPIView,
+    KakaoLoginAPIView,
+    UserProfileAPIView,
+    UserUpdateAPIView,
+    LogoutAPIView,
+    DeleteAccountAPIView,
+)
 
 urlpatterns = [
     path("kakao/login/", KakaoLoginAPIView.as_view(), name="kakao_login"),
