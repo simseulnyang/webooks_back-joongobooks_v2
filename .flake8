@@ -16,4 +16,5 @@ exclude =
 ignore = E501, W503, E203
 per-file-ignores =
     __init__.py:F401
+    config/asgi.py:E402
     */settings.py:E501
