@@ -1,47 +1,120 @@
-# accounts/views.py
 import logging
+from rest_framework_simplejwt.exceptions import TokenError
 
 from django.conf import settings
-from django.http import HttpResponse
+from django.db import transaction
 
 import requests
 from drf_spectacular.utils import OpenApiExample, extend_schema
 from rest_framework import status
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
+
 
 from .models import SocialAccount, User
 from .serializers import (
-    SocialLoginRequestSerializer,
+    SocialLoginSerializer,
     SocialLoginResponseSerializer,
     UserSerializer,
+    UserUpdateSerializer,
+    LogoutSerializer,
+    DeleteAccountSerializer,
+    MessageResponseSerializer,
 )
 
+logger = logging.getLogger(__name__)
 
-#! 추후에 Flutter 진행 시 삭제해야 할 코드 (callback은 front에서 진행하는 것)
-def callback_view(request):
-    code = request.GET.get("code")
-    error = request.GET.get("error")
 
-    if error:
-        return HttpResponse(f"kakao Login Error: {error}")
-
-    return HttpResponse(f"kakao Authorization code: {code}")
+@transaction.atomic
+def get_or_create_user_by_social(
+    provider: str,
+    provider_user_oid: str,
+    email: str,
+    username: str,
+    profile_image: str,    
+):
+    """
+    SocialAccount가 있으면 그 user 반환,
+    없으면 email로 User 탐색:
+        - 해당 email에 다른 provider가 연결되어 있으면 409 반환
+        - 아니면 User 생성/재사용 후 SocialAccount 생성
+    """
+    try:
+        social = SocialAccount.objects.select_related("user").get(
+            provider=provider,
+            provider_user_oid=provider_user_oid,
+        )
+        return social.user, False
+    
+    except SocialAccount.DoesNotExist:
+        user = User.objects.filter(email=email).first()
+        
+        if user:
+            other_social = user.social_accounts.exclude(provider=provider).first()
+            if other_social:
+                provider_name = "카카오" if other_social.provider == SocialAccount.Provider.KAKAO else "구글"
+                raise ValueError(
+                    f"이미 {provider_name} 계정으로 가입된 이메일입니다. {provider_name}으로 로그인 해주세요."
+                )
+            
+            SocialAccount.objects.create(
+                user=user,
+                provider=provider,
+                provider_user_oid=provider_user_oid,
+            )
+            return user, False
+        
+        user = User.objects.create(
+            email=email,
+            username=username,
+            profile_image=profile_image,
+        )
+        SocialAccount.objects.create(
+            user=user,
+            provider=provider,
+            provider_user_oid=provider_user_oid,
+        )
+        return user, True
+    
+def issue_jwt_response(user: User, is_created: bool) -> dict:
+    refresh = RefreshToken.for_user(user)
+    payload = {
+        "access_token": str(refresh.access_token),
+        "refresh_token": str(refresh),
+        "user": UserSerializer(user).data,
+        "is_created": is_created,
+    }
+    return Response(SocialLoginResponseSerializer(payload).data, status=status.HTTP_200_OK)
 
 
 class KakaoLoginAPIView(APIView):
+    """
+    카카오 소셜 로그인 API
+    
+    Flutter에서 카카오 SDK로 받은 access_token을 token으로 전송하면
+    → /v2/user/me 호출로 사용자 정보 획득
+    → (필수) 이메일 없으면 실패
+    → User & SocialAccount 연결 후 우리 서비스 JWT 발급
+    """
+    permission_classes = [AllowAny]
+    
     @extend_schema(
         tags=["Auth - KakaoSocial"],
         summary="카카오 소셜 로그인",
         description=(
-            "카카오 인가 코드를 이용하여 우리 서비스용 JWT 토큰을 발급합니다.\n"
-            "프론트에서 카카오 로그인 후 받은 `code`를 전송하세요."
+            "1. 요청: provider='kakao', token=카카오 access_token\n"
+            "2. 처리: kakao /v2/user/me로 사용자 정보 조회 후 JWT 발급\n"
+            "3. 제약: 이메일 제공 동의 필수(미제공 시 400)\n"
         ),
-        request=SocialLoginRequestSerializer,
+        request=SocialLoginSerializer,
         responses={
             200: SocialLoginResponseSerializer,
-            400: {"type": "object", "properties": {"detail": {"type": "string"}}},
+            400: MessageResponseSerializer,
+            409: MessageResponseSerializer,
+            503: MessageResponseSerializer,
         },
         examples=[
             OpenApiExample(
@@ -63,228 +136,335 @@ class KakaoLoginAPIView(APIView):
         ],
     )
     def post(self, request, *args, **kwargs):
-        logger = logging.getLogger(__name__)
-        # 1) 요청 검증
-        serializer = SocialLoginRequestSerializer(data=request.data)
+        serializer = SocialLoginSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        code = serializer.validated_data["code"]
 
-        # 2) 카카오 토큰/프로필 요청
-        kakao_rest_api_key = settings.KAKAO_REST_API_KEY
-        kakao_client_secret = settings.KAKAO_CLIENT_SECRET
-        kakao_redirect_uri = settings.KAKAO_REDIRECT_URI
-        token_res = requests.post(
-            "https://kauth.kakao.com/oauth/token",
-            data={
-                "grant_type": "authorization_code",
-                "client_id": kakao_rest_api_key,
-                "client_secret": kakao_client_secret,
-                "redirect_uri": kakao_redirect_uri,
-                "code": code,
-            },
-        )
-
-        logger.error("Kakao token response status: %s", token_res.status_code)
-        logger.error("Kakao token response body: %s", token_res.text)
-
-        if token_res.status_code != 200:
+        provider = serializer.validated_data["provider"]
+        token = serializer.validated_data["token"]
+        
+        if provider != SocialAccount.Provider.KAKAO:
             return Response(
-                {"detail": "Failed to obtain access token from Kakao"},
+                {"message": "이 엔드포인트는 provider='kakao' 전용입니다."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
-        access_token = token_res.json().get("access_token")
-
-        headers = {"Authorization": f"Bearer {access_token}"}
-        profile_res = requests.get("https://kapi.kakao.com/v2/user/me", headers=headers)
-
-        if profile_res.status_code != 200:
-            return Response(
-                {"detail": "Failed to obtain user information from Kakao"},
-                status=status.HTTP_400_BAD_REQUEST,
+        
+        try:
+            headers = {"Authorization": f"Bearer {token}"}
+            profile_res = requests.get(
+                "https://kapi.kakao.com/v2/user/me", 
+                headers=headers,
+                timeout=10,
             )
+            if profile_res.status_code != 200:
+                logger.error(f"kakao profile error: {profile_res.status_code}, {profile_res.text}")
+                return Response(
+                    {"message": "카카오 사용자 정보 조회 실패"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+                
+            profile_json = profile_res.json()
+            
+        except requests.exceptions.Timeout:
+            logger.error("Kakao API Timeout")
+            return Response(
+                {"message": "카카오 서버 응답 시간 초과"},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Kakao API Request failed: {str(e)}")
+            return Response(
+                {"message": "카카오 서버 요청 실패"},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        
 
-        profile_json = profile_res.json()
-        kakao_oid = str(profile_json["id"])
+        kakao_oid = str(profile_json.get("id"))
         properties = profile_json.get("properties", {})
         kakao_account = profile_json.get("kakao_account", {})
 
         email = kakao_account.get("email")
-        nickname = properties.get("nickname") or email
+        nickname = properties.get("nickname") or email or "Kakao유저"
         profile_image = properties.get("profile_image", "")
-
-        # 3) SocialAccount & User 연결
-        try:
-            social = SocialAccount.objects.get(
-                provider=SocialAccount.Provider.KAKAO,
-                provider_user_oid=kakao_oid,
+        
+        if not kakao_oid:
+            return Response(
+                {"message": "카카오 사용자 ID를 가져올 수 없습니다."},
+                status=status.HTTP_400_BAD_REQUEST
             )
-            user = social.user
-            created = False
-        except SocialAccount.DoesNotExist:
-            user, created = User.objects.get_or_create(
-                email=email,
-                defaults={
-                    "username": nickname,
-                    "profile_image": profile_image,
+            
+        if not email:
+            return Response(
+                {
+                    "message": "카카오 로그인 시 이메일 제공 동의가 필요합니다.",
+                    "errors": {"email": "카카오에서 이메일을 제공하지 않았습니다. 카카오 앱에서 이메일 제공에 동의해주세요."},
                 },
+                status=status.HTTP_400_BAD_REQUEST,
             )
-            SocialAccount.objects.create(
-                user=user,
+            
+        try:
+            user, is_created = get_or_create_user_by_social(
                 provider=SocialAccount.Provider.KAKAO,
                 provider_user_oid=kakao_oid,
+                email=email,
+                username=nickname or email or "Kakao유저",
+                profile_image=profile_image,
+            )
+        except ValueError as e:
+            return Response(
+                {"message": str(e), "errors":{"email": str(e)}},
+                status=status.HTTP_409_CONFLICT,
             )
 
-        # 4) JWT 발급
-        refresh = RefreshToken.for_user(user)
-
-        response_data = {
-            "access_token": str(refresh.access_token),
-            "refresh_token": str(refresh),
-            "user": UserSerializer(user).data,
-            "is_created": created,
-        }
-
-        output_serializer = SocialLoginResponseSerializer(response_data)
-        return Response(output_serializer.data, status=status.HTTP_200_OK)
+        return issue_jwt_response(user, is_created)
 
 
 class GoogleLoginAPIView(APIView):
+    """
+    구글 소셜 로그인 API
+
+    Flutter에서 구글 SDK로 받은 id_Token을 전송하면
+    → 서버에서 id_token 검증 후 (sub, email, name, picture) 추출
+    → (필수) 이메일 없으면 실패
+    → User & SocialAccount 연결 후 JWT 발급
+    
+    **참고**:
+    Google은 서버에서 ID 토큰 검증이 권장됨 :contentReference[oaicite:3]{index=3}
+    """
+    
+    permission_classes = [AllowAny]
+    
     @extend_schema(
         tags=["Auth - GoogleSocial"],
         summary="구글 소셜 로그인",
         description=(
-            "구글 인가 코드를 이용하여 우리 서비스용 JWT 토큰을 발급합니다.\n"
-            "프론트에서 구글 로그인 후 받은 `code`를 전송하세요."
+            "1. 요청: provider='google', token=Google id_token\n"
+            "2. 처리: 서버에서 id_token 검증 후 JWT 발급\n"
+            "3. 제약: 이메일 제공 필수"
         ),
-        request=SocialLoginRequestSerializer,
+        request=SocialLoginSerializer,
         responses={
             200: SocialLoginResponseSerializer,
-            400: {"type": "object", "properties": {"detail": {"type": "string"}}},
+            400: MessageResponseSerializer,
+            409: MessageResponseSerializer,
+            503: MessageResponseSerializer,
         },
-        examples=[
-            OpenApiExample(
-                "성공 예시",
-                value={
-                    "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6...",
-                    "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6...",
-                    "user": {
-                        "id": 1,
-                        "email": "test@example.com",
-                        "username": "심슬냥",
-                        "profile_image": "https://...",
-                        "created_at": "2025-11-17T12:34:56Z",
-                    },
-                    "is_created": True,
-                },
-                response_only=True,
-            )
-        ],
     )
     def post(self, request, *args, **kwargs):
-        logger = logging.getLogger(__name__)
-
-        # 1) 요청 검증
-        serializer = SocialLoginRequestSerializer(data=request.data)
+        serializer = SocialLoginSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        code = serializer.validated_data["code"]
-
-        # 2) 구글 토큰/프로필 요청
-        google_client_id = settings.GOOGLE_CLIENT_ID
-        google_client_secret = settings.GOOGLE_CLIENT_SECRET
-        google_redirect_uri = settings.GOOGLE_REDIRECT_URI
-
-        token_res = requests.post(
-            "https://oauth2.googleapis.com/token",
-            data={
-                "grant_type": "authorization_code",
-                "client_id": google_client_id,
-                "client_secret": google_client_secret,
-                "redirect_uri": google_redirect_uri,
-                "code": code,
-            },
-        )
-
-        logger.error("Google token response status: %s", token_res.status_code)
-        logger.error("Google token response body: %s", token_res.text)
-
-        if token_res.status_code != 200:
+        
+        provider = serializer.validated_data["provider"]
+        token = serializer.validated_data["token"]
+        
+        if provider != SocialAccount.Provider.GOOGLE:
             return Response(
-                {"detail": "Failed to obtain access token from Google"},
+                {"message": "이 엔드포인트는 provider='google' 전용입니다."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        token_json = token_res.json()
-        access_token = token_json.get("access_token")
+        # ID 토큰 검증 (권장: google-auth 사용)
+        #   - 공식 문서도 서버에서 검증을 권장 : contentReference[oaicite:4]{index=4}
+        
+        google_oid = None
+        email = None
+        name = None
+        picture = ""
 
-        if not access_token:
-            return Response(
-                {"detail": "Google access token not found in response"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        # 3) access_token으로 구글 userinfo 조회
-        headers = {"Authorization": f"Bearer {access_token}"}
-        profile_res = requests.get(
-            "https://openidconnect.googleapis.com/v1/userinfo",
-            headers=headers,
-        )
-
-        if profile_res.status_code != 200:
-            return Response(
-                {"detail": "Google access token not found in response"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        profile_json = profile_res.json()
-
-        # 구글의 고유 사용자 ID (sub)
-        google_oid = profile_json.get("sub")
-        email = profile_json.get("email")
-        name = profile_json.get("name") or email
-        picture = profile_json.get("picture", "")
-
-        if not google_oid or not email:
-            return Response(
-                {"detail": "Google user info does not contain required fields"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        # 4) SocialAccount & User 연결 (이메일 같으면 같은 계정으로 묶는 핵심 로직)
         try:
-            social = SocialAccount.objects.get(
-                provider=SocialAccount.Provider.GOOGLE,
-                provider_user_oid=google_oid,
+            from google.oauth2 import id_token as google_id_token
+            from google.auth.transport import requests as google_requests
+            
+            idinfo = google_id_token.verify_oauth2_token(
+                token,
+                google_requests.Request(),
+                settings.GOOGLE_CLIENT_ID,
             )
-            user = social.user
-            created = False
-        except SocialAccount.DoesNotExist:
-            user = User.objects.filter(email=email).first()
-
-            if user is None:
-                user = User.objects.create(
-                    email=email,
-                    username=name,
-                    profile_image=picture,
+            
+            google_oid = idinfo.get("sub")
+            email = idinfo.get("email")
+            email_verified = idinfo.get("email_verified", False)
+            name = idinfo.get("name") or email or "Google 유저"
+            picture = idinfo.get("picture", "")
+            
+            if not email_verified:
+                return Response(
+                    {"message": "구글 로그인 시 이메일 인증이 필요합니다.", "errors": {"email": "email_verified=False"}},
+                    status=status.HTTP_400_BAD_REQUEST,
                 )
-                created = True
-            else:
-                created = False
+                
+        except Exception as e:
+            logger.error("Google id_token verify failed: %s", str(e))
+            return Response({"message": "구글 토큰 검증 실패"}, status=status.HTTP_400_BAD_REQUEST)
 
-            SocialAccount.objects.create(
-                user=user,
-                provider=SocialAccount.Provider.GOOGLE,
-                provider_user_oid=google_oid,
+        if not google_oid:
+            return Response(
+                {"message": "구글 사용자 ID를 가져올 수 없습니다."},
+                status=status.HTTP_400_BAD_REQUEST
             )
 
-        refresh = RefreshToken.for_user(user)
+        if not email:
+            return Response(
+                {"message": "구글 로그인 시 이메일 제공이 필요합니다.", "errors": {"email": "구글에서 이메일을 제공하지 않았습니다."}},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+            
+        try:
+            user, is_created = get_or_create_user_by_social(
+                provider=SocialAccount.Provider.GOOGLE,
+                provider_user_oid=str(google_oid),
+                email=email,
+                username=name or email or "Google유저",
+                profile_image=picture,
+            )
+        except ValueError as e:
+            return Response(
+                {"message": str(e), "errors":{"email": str(e)}},
+                status=status.HTTP_409_CONFLICT,
+            )
 
-        response_data = {
-            "access_token": str(refresh.access_token),
-            "refresh_token": str(refresh),
-            "user": UserSerializer(user).data,
-            "is_created": created,
-        }
+        return issue_jwt_response(user, is_created)
 
-        output_serializer = SocialLoginResponseSerializer(response_data)
-        return Response(output_serializer.data, status=status.HTTP_200_OK)
+
+class UserProfileAPIView(APIView):
+    """
+    사용자 프로필 조회 API
+    
+    현재 로그인한 사용자의 정보를 반환합니다.
+    """
+    
+    permission_classes = [IsAuthenticated]
+    
+    @extend_schema(
+        tags=["User - Profile"],
+        summary="사용자 프로필 조회",
+        description="현재 로그인한 사용자의 프로필 정보를 반환합니다.",
+        responses={
+            200: UserSerializer,
+            401: MessageResponseSerializer,
+        },
+    )
+    def get(self, request):
+        serialzer = UserSerializer(request.user)
+        return Response(serialzer.data, status=status.HTTP_200_OK)
+    
+    
+class UserUpdateAPIView(APIView):
+    """
+    사용자 정보 수정 API
+    
+    현재 로그인한 사용자의 닉네임과 프로필 이미지를 수정합니다.
+    """
+    
+    permission_classes = [IsAuthenticated]
+    
+    @extend_schema(
+        tags=["User - Update"],
+        summary="사용자 정보 수정",
+        description=(
+            "사용자 정보를 수정합니다.\n"
+            "**수정 가능:** username (2~20자), profile_image"
+            
+        ),
+        request=UserUpdateSerializer,
+        responses={
+            200: UserSerializer,
+            400: MessageResponseSerializer,
+            401: MessageResponseSerializer,
+        },
+    )
+    def patch(self, request):
+        if not request.data:
+            return Response(
+                {"message": "수정할 데이터가 없습니다.", "errors": {"non_field_errors": "빈 요청"}},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+            
+        user = request.user
+        serializer = UserUpdateSerializer(
+            user,
+            data=request.data,
+            partial=True,
+        )
+        
+        if not serializer.is_valid():
+            return Response(
+                {"message": "입력값이 올바르지 않습니다.", "errors": serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        serializer.save()
+        return Response(
+            UserSerializer(serializer.instance).data, status=status.HTTP_200_OK
+        )
+
+
+class LogoutAPIView(APIView):
+    """로그아웃 API"""
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["Auth - Logout"],
+        summary="로그아웃",
+        description="Refresh Token을 블랙리스트에 추가하여 로그아웃 처리합니다.",
+        request=LogoutSerializer,
+        responses={200: MessageResponseSerializer, 400: MessageResponseSerializer, 401: MessageResponseSerializer},
+    )
+    def post(self, request):
+        serializer = LogoutSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        refresh_token = serializer.validated_data["refresh_token"]
+
+        try:
+            token = RefreshToken(refresh_token)
+            token.blacklist()
+        except TokenError as e:
+            logger.warning(f"Logout token error: {e}")
+        except Exception as e:
+            logger.error(f"Logout error: {e}")
+            return Response(
+                {"message": "로그아웃 처리 중 오류가 발생했습니다."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+            
+        return Response(
+            {"message": "로그아웃이 완료되었습니다."}, status=status.HTTP_200_OK
+        )
+
+
+class DeleteAccountAPIView(APIView):
+    """회원탈퇴 API"""
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        tags=["Auth - DeleteAccount"],
+        summary="회원탈퇴",
+        description="현재 로그인한 사용자의 계정을 삭제합니다. confirm=true 필수.",
+        request=DeleteAccountSerializer,
+        responses={200: MessageResponseSerializer, 400: MessageResponseSerializer, 401: MessageResponseSerializer},
+    )
+    @transaction.atomic
+    def delete(self, request):
+        serializer = DeleteAccountSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        user = request.user
+        user_email = user.email
+
+        try:
+            for outstanding in OutstandingToken.objects.filter(user=user):
+                BlacklistedToken.objects.get_or_create(token=outstanding)
+                
+            user.delete()
+            logger.info(f"User account deleted: {user_email} (ID: {user.id})")
+            
+            return Response({"message": "회원탈퇴가 완료되었습니다."}, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            logger.error(f"Delete account error: {e}")
+            return Response(
+                {"message": "회원탈퇴 처리 중 오류가 발생했습니다."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
