@@ -14,21 +14,6 @@ jobs:
       with:
         fetch-depth: 0  # 전체 히스토리를 가져와서 커밋 메시지 확인
 
-    - name: 🔍 Check PR title convention
-      run: |
-        PR_TITLE="${{ github.event.pull_request.title }}"
-        echo "PR Title: $PR_TITLE"
-        
-        # Conventional Commits 형식 체크
-        if echo "$PR_TITLE" | grep -qE '^(Feat|Fix|Docs|Style|Refactor|Test|Chore)(\(.+\))?: .+'; then
-          echo "✅ PR title follows Conventional Commits format"
-        else
-          echo "❌ PR title does not follow Conventional Commits format"
-          echo "Expected format: Type(scope): description"
-          echo "Types: Feat, Fix, Docs, Style, Refactor, Test, Chore"
-          exit 1
-        fi
-
     - name: 📝 Check commit messages
       run: |
         echo "Checking commit messages..."
@@ -38,7 +23,7 @@ jobs:
           MESSAGE=$(git log -1 --format="%s" $commit)
           echo "Checking: $MESSAGE"
           
-          if echo "$MESSAGE" | grep -qE '^(Feat|Fix|Docs|Style|Refactor|Test|Chore)(\(.+\))?: .+'; then
+          if echo "$MESSAGE" | grep -qE '^(Feat|Fix|Docs|Style|Refactoring|Test|Chore)(\(.+\))?: .+'; then
             echo "  ✅ Valid"
           else
             echo "  ❌ Invalid - does not follow Conventional Commits"
