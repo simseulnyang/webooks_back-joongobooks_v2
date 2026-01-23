@@ -100,7 +100,7 @@ class ChatRoomListSerializerTest(TestCase):
 
     def test_last_message_exists(self):
         """마지막 메시지 정보 확인"""
-        message = MessageFactory(chatroom=self.chatroom, sender=self.seller, content="안녕하세요")
+        MessageFactory(chatroom=self.chatroom, sender=self.seller, content="안녕하세요")
 
         request = self.factory.get("/")
         request.user = self.buyer

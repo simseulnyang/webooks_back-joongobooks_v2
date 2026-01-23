@@ -4,7 +4,6 @@ from rest_framework.test import APIClient, APITestCase
 from accounts.factories import UserFactory
 from books.factories import BookFactory
 from chat.factories import ChatRoomFactory, MessageFactory
-from chat.models import Message
 
 
 class MessageListViewTest(APITestCase):
@@ -64,9 +63,9 @@ class MessageListViewTest(APITestCase):
         """메시지 정렬 (오래된 순)"""
         self.client.force_authenticate(user=self.buyer)
 
-        msg1 = MessageFactory(chatroom=self.chatroom, sender=self.buyer, content="첫번째")
-        msg2 = MessageFactory(chatroom=self.chatroom, sender=self.seller, content="두번째")
-        msg3 = MessageFactory(chatroom=self.chatroom, sender=self.buyer, content="세번째")
+        MessageFactory(chatroom=self.chatroom, sender=self.buyer, content="첫번째")
+        MessageFactory(chatroom=self.chatroom, sender=self.seller, content="두번째")
+        MessageFactory(chatroom=self.chatroom, sender=self.buyer, content="세번째")
 
         response = self.client.get(self.url)
 
@@ -101,8 +100,6 @@ class MessageListViewTest(APITestCase):
 
         # 내가 보낸 메시지 (is_read=False)
         my_message = MessageFactory(chatroom=self.chatroom, sender=self.buyer, is_read=False)
-
-        response = self.client.get(self.url)
 
         # 내 메시지는 읽음 처리되지 않음
         my_message.refresh_from_db()
@@ -143,8 +140,6 @@ class MessageListViewTest(APITestCase):
 
         # 내가 보낸 메시지
         my_msg = MessageFactory(chatroom=self.chatroom, sender=self.buyer, is_read=False)
-
-        response = self.client.get(self.url)
 
         # 판매자 메시지는 읽음 처리
         seller_msg.refresh_from_db()

@@ -1,5 +1,4 @@
 from django.db import models
-from django.shortcuts import render
 
 from drf_spectacular.utils import extend_schema
 from rest_framework import status

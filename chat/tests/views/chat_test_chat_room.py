@@ -4,7 +4,6 @@ from rest_framework.test import APIClient, APITestCase
 from accounts.factories import UserFactory
 from books.factories import BookFactory
 from chat.factories import ChatRoomFactory, MessageFactory
-from chat.models import ChatRoom
 
 
 class ChatRoomCreateOrGetViewTest(APITestCase):

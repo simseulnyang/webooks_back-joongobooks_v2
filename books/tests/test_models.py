@@ -74,8 +74,8 @@ class FavoriteModelTest(TestCase):
         """다른 유저는 같은 책에 좋아요 가능"""
         user2 = UserFactory()
 
-        favorite1 = FavoriteFactory(user=self.user, book=self.book)
-        favorite2 = FavoriteFactory(user=user2, book=self.book)
+        FavoriteFactory(user=self.user, book=self.book)
+        FavoriteFactory(user=user2, book=self.book)
 
         self.assertEqual(Favorite.objects.filter(book=self.book).count(), 2)
 
