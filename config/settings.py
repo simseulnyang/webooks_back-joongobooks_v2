@@ -37,6 +37,7 @@ INSTALLED_APPS = [
     "rest_framework",
     "rest_framework.authtoken",
     "rest_framework_simplejwt",
+    "rest_framework_simplejwt.token_blacklist",
     "corsheaders",
     "drf_spectacular",
     "allauth",
@@ -177,16 +178,11 @@ SPECTACULAR_SETTINGS = {
     "VERSION": "2.0.0",
 }
 
-JWT_AUTH = {
+SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=60),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
+    "ROTATE_REFRESH_TOKENS": False,
     "ALGORITHM": "HS256",
-    "TOKEN_USER_CLASS": "accounts.User",
-    "AUTH_COOKIE": "access",  # Access 토큰의 쿠키 이름
-    "AUTH_COOKIE_REFRESH": "refresh",  # Refresh 토큰의 쿠키 이름
-    "AUTH_COOKIE_SECURE": True,  # HTTPS에서만 쿠키 전송
-    "AUTH_COOKIE_HTTPONLY": True,  # HttpOnly 설정
-    "AUTH_COOKIE_SAMESITE": "Lax",  # SameSite 설정
     "AUTH_HEADER_TYPES": ("Bearer",),
 }
 
