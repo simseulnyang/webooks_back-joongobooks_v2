@@ -1,4 +1,5 @@
 import json
+import logging
 
 from django.contrib.auth import get_user_model
 
@@ -9,6 +10,7 @@ from chat.models import ChatRoom, Message
 
 User = get_user_model()
 
+logger = logging.getLogger(__name__)
 
 class ChatConsumer(AsyncWebsocketConsumer):
     """
@@ -26,16 +28,33 @@ class ChatConsumer(AsyncWebsocketConsumer):
         """
         WebSocket 연결 시 호출
         - URL에서 chatroom_id 추출
-        - 권한 확인
+        - 인증/권한 확인
         - 그룹에 추가
+        - accept 후 입장 브로드캐스트
         """
-        self.chatroom_id = self.scope["url_route"]["kwargs"]["chatroom_id"]
+        logger.warning(f"[WS CONNECT] path={self.scope.get('path')} user={self.scope.get('user')} headers={self.scope.get('headers')}")
+        
+        self.chatroom_id = self.scope["url_route"]["kwargs"].get("chatroom_id")
+        if self.chatroom_id is None:
+            await self.close(code=4400)
+            return
+        
         self.room_group_name = f"chat_{self.chatroom_id}"
 
-        self.user = self.scope["user"]
+        self.user = self.scope.get("user")
+        if not self.user or not getattr(self.user, "is_authenticated", False):
+            await self.close(code=4401)
+            return
+        
+        try:
+            has_permission = await self.check_permission()
+        except Exception as e:
+            logger.exception("❌ [WS CONNECT] check_permission error", exc_info=e)
+            await self.close(code=4500)
+            return
 
-        if not self.user.is_authenticated:
-            await self.close()
+        if not has_permission:
+            await self.close(code=4403)  # Forbidden
             return
 
         has_permission = await self.check_permission()
@@ -44,11 +63,15 @@ class ChatConsumer(AsyncWebsocketConsumer):
             return
 
         await self.channel_layer.group_add(self.room_group_name, self.channel_name)
-
-        await self.accept()
+        await self.accept(subprotocol="Authorization")
 
         await self.channel_layer.group_send(
-            self.room_group_name, {"type": "user_join", "username": self.user.username, "user_id": self.user.id}
+            self.room_group_name,
+            {
+                "type": "user_join",
+                "username": self.user.username,
+                "user_id": self.user.id,
+            },
         )
 
     async def disconnect(self, close_code):
@@ -62,18 +85,77 @@ class ChatConsumer(AsyncWebsocketConsumer):
         """
         클라이언트로부터 메시지 수신
         - JSON 파싱
-        - 타입별 처리 (message, read 등)
+        - 타입별 처리 (message, read, typing)
         """
-        data = json.loads(text_data)
+        
+        if not text_data:
+            logger.warning("[WS RECEIVE] empty text_data")
+            return
+        
+        try:
+            data = json.loads(text_data)
+        except Exception as e:
+            logger.exception(f"[WS RECEIVE] JSON parse error: {e}, raw={text_data}")
+            return
+        
         message_type = data.get("type", "message")
-
+        
+        logger.warning(
+            f"[WS RECEIVE] room={getattr(self, 'chatroom_id', None)} "
+            f"user={getattr(self, 'user', None)} type={message_type} data={data}"
+        )
+        
         if message_type == "message":
-            content = data.get("content", "").strip()
-
+            content = (data.get("content") or data.get("message") or "").strip()
             if not content:
                 return
+            
+            try:
+                message = await self.save_message(content)
+            except Exception as e:
+                logger.exception(f"[WS SAVE_MESSAGE] failed: {e}")
+                await self.send(
+                    text_data=json.dumps({
+                        "type": "error",
+                        "error": "failed_to_save_message",
+                    })
+                )
+                return
+            
+            payload = {
+                "type": "chat_message",
+                "message": {
+                    "id": message.id,
+                    "content": message.content,
+                    # created_at 키 이름도 Flutter가 기대하는 createdAt/created_at 중 무엇인지에 따라 조정 필요
+                    # 일단 snake_case 유지
+                    "created_at": message.created_at.isoformat(),
+                    "is_read": message.is_read,
+                    "room": self.chatroom_id,   # ✅ Message.room이 int라면 필요
+                    "sender": {
+                        "id": message.sender.id,
+                        "username": message.sender.username,
+                        # Flutter User 모델에 email/profileImage 등이 required면 여기서도 넣어줘야 함
+                        # 없으면 null/""로 내려야 파싱 에러가 안 남
+                        "email": getattr(message.sender, "email", None),
+                        "profile_image": getattr(message.sender, "profile_image", "") or "",
+                    },
+                },
+            }
 
-            message = await self.save_message(content)
+            await self.channel_layer.group_send(self.room_group_name, payload)
+            logger.warning(f"[WS GROUP_SEND] room={self.chatroom_id} sent message_id={message.id}")
+
+        elif message_type == "read":
+            message_ids = data.get("message_ids") or []
+            if not isinstance(message_ids, list):
+                message_ids = []
+
+            try:
+                await self.mark_messages_as_read(message_ids)
+            except Exception as e:
+                logger.exception(f"[WS MARK_READ] failed: {e}")
+                return
 
             await self.channel_layer.group_send(
                 self.room_group_name,
@@ -81,52 +163,68 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     "type": "chat_message",
                     "message": {
                         "id": message.id,
+                        "room_id": self.chatroom_id,  
                         "content": message.content,
                         "sender_id": message.sender.id,
-                        "sender_username": message.sender.username,
+                        "sender_name": message.sender.username,  
+                        "sender_image": getattr(message.sender, "profile_image", "") or "", 
                         "created_at": message.created_at.isoformat(),
                         "is_read": message.is_read,
                     },
                 },
             )
 
-        elif message_type == "read":
-            message_ids = data.get("message_ids", [])
-            await self.mark_messages_as_read(message_ids)
-
-            await self.channel_layer.group_send(
-                self.room_group_name, {"type": "message_read", "message_ids": message_ids, "user_id": self.user.id}
-            )
-
         elif message_type == "typing":
-            is_typing = data.get("is_typing", False)
+            is_typing = bool(data.get("is_typing", False))
             await self.channel_layer.group_send(
                 self.room_group_name,
                 {
-                    "type": "user_typing",
-                    "user_id": self.user.id,
-                    "username": self.user.username,
-                    "is_typing": is_typing,
+                    "type": "chat_message",
+                    "message": {
+                        "id": message.id,
+                        "room_id": self.chatroom_id,  
+                        "content": message.content,
+                        "sender_id": message.sender.id,
+                        "sender_name": message.sender.username,  
+                        "sender_image": getattr(message.sender, "profile_image", "") or "", 
+                        "created_at": message.created_at.isoformat(),
+                        "is_read": message.is_read,
+                    },
                 },
             )
 
+        else:
+            logger.warning(f"[WS RECEIVE] unknown type={message_type}")
+
     async def chat_message(self, event):
         """채팅 메시지를 클라이언트로 전송"""
-        await self.send(text_data=json.dumps({"type": "message", "message": event["message"]}))
+        await self.send(text_data=json.dumps(event))
 
     async def messages_read(self, event):
         """메시지 읽음 상태를 클라이언트로 전송"""
         await self.send(
-            text_data=json.dumps({"type": "read", "message_ids": event["message_ids"], "user_id": event["user_id"]})
+            text_data=json.dumps(event)
         )
 
     async def user_typing(self, event):
         """타이핑 상태를 클라이언트로 전송"""
         # 자기 자신에게는 전송하지 않음
-        if event["user_id"] != self.user.id:
-            await self.send(
-                text_data=json.dumps({"type": "typing", "username": event["username"], "is_typing": event["is_typing"]})
-            )
+        sender_id = event.get("user_id")
+        # 안전장치: user 없으면 그냥 보내지 않음
+        if sender_id is None:
+            return
+
+        # 자기 자신에게는 전송하지 않음
+        if getattr(self.user, "id", None) == sender_id:
+            return
+
+        await self.send(text_data=json.dumps({
+            "type": "user_typing",           # ✅ 타입 일관성 유지
+            "user_id": sender_id,
+            "username": event.get("username"),
+            "is_typing": bool(event.get("is_typing", False)),
+            "room": getattr(self, "chatroom_id", None),  # 있으면 디버깅에 도움
+        }))
 
     async def user_join(self, event):
         """사용자 접속 알림"""

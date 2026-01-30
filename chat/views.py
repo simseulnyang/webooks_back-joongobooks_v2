@@ -11,6 +11,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from books.models import Book
+from books.pagination import BookPagination
 
 from .models import ChatRoom, Message
 from .serializers import ChatRoomDetailSerializer, ChatRoomListSerializer, MessageSerializer
@@ -55,6 +56,7 @@ class ChatRoomCreateOrGetView(APIView):
                 "새 채팅방 생성 성공 (201)",
                 value={
                     "id": 1,
+                    "room": 1,
                     "book": {
                         "id": 1,
                         "title": "해리포터와 마법사의 돌",
@@ -74,6 +76,7 @@ class ChatRoomCreateOrGetView(APIView):
                 "기존 채팅방 반환 (200)",
                 value={
                     "id": 1,
+                    "room": 1,
                     "book": {
                         "id": 1,
                         "title": "해리포터와 마법사의 돌",
@@ -210,10 +213,17 @@ class ChatRoomListView(APIView):
             .prefetch_related("messages")
             .order_by("-updated_at")
         )
+        
+        paginator = BookPagination()
+        paginated_rooms = paginator.paginate_queryset(chatrooms, request)
 
-        serializer = ChatRoomListSerializer(chatrooms, many=True, context={"request": request})
+        serializer = ChatRoomListSerializer(
+            paginated_rooms, 
+            many=True, 
+            context={"request": request}
+        )
 
-        return Response(serializer.data)
+        return paginator.get_paginated_response(serializer.data)
 
 
 class ChatRoomDetailView(APIView):
@@ -250,6 +260,7 @@ class ChatRoomDetailView(APIView):
                 "채팅방 상세 조회 성공",
                 value={
                     "id": 1,
+                    "room": 1,
                     "book": {
                         "id": 1,
                         "title": "해리포터와 마법사의 돌",
@@ -265,6 +276,7 @@ class ChatRoomDetailView(APIView):
                     "messages": [
                         {
                             "id": 1,
+                            "room": 1,
                             "sender": 2,
                             "sender_username": "구매자",
                             "sender_email": "buyer@example.com",
@@ -274,6 +286,7 @@ class ChatRoomDetailView(APIView):
                         },
                         {
                             "id": 2,
+                            "room": 1,
                             "sender": 1,
                             "sender_username": "판매자",
                             "sender_email": "seller@example.com",
@@ -336,6 +349,7 @@ class MessageListView(APIView):
                 value=[
                     {
                         "id": 1,
+                        "room": 1,
                         "sender": 2,
                         "sender_username": "구매자",
                         "sender_email": "buyer@example.com",
@@ -345,6 +359,7 @@ class MessageListView(APIView):
                     },
                     {
                         "id": 2,
+                        "room": 1,
                         "sender": 1,
                         "sender_username": "판매자",
                         "sender_email": "seller@example.com",
@@ -354,6 +369,7 @@ class MessageListView(APIView):
                     },
                     {
                         "id": 3,
+                        "room": 1,
                         "sender": 2,
                         "sender_username": "구매자",
                         "sender_email": "buyer@example.com",

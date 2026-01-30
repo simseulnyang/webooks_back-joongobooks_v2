@@ -4,19 +4,40 @@ from rest_framework import serializers
 
 from books.serializers import BookListSerializer
 
-from .models import ChatRoom, Message
+from books.models import Book
+from chat.models import ChatRoom, Message
+
+
+def safe_image_url(value) -> str:
+    """
+    value가 ImageFieldFile 또는 그냥 문자열 또는 None 이어도
+    안전하게 URL 문자열만 반환
+    """
+    if not value:
+        return ""
+    
+    if hasattr(value, "url"):
+        try:
+            return value.url or ""
+        except Exception:
+            return ""
+    
+    if isinstance(value, str):
+        return value
+
+        return ""
 
 
 class MessageSerializer(serializers.ModelSerializer):
-    """메시지 직렬화"""
-
+    room = serializers.IntegerField(source="chatroom_id", read_only=True)
+    
     sender_username = serializers.CharField(source="sender.username", read_only=True)
     sender_email = serializers.CharField(source="sender.email", read_only=True)
 
     class Meta:
         model = Message
-        fields = ["id", "sender", "sender_username", "sender_email", "content", "is_read", "created_at"]
-        read_only_fields = ["sender", "created_at", "is_read"]
+        fields = ["id", "room", "sender", "sender_username", "sender_email", "content", "is_read", "created_at"]
+        read_only_fields = ["room", "sender", "created_at", "is_read"]
 
 
 class ChatRoomListSerializer(serializers.ModelSerializer):
@@ -40,7 +61,7 @@ class ChatRoomListSerializer(serializers.ModelSerializer):
                 "id": other.id,
                 "username": other.username,
                 "email": other.email,
-                "profile_image": other.profile_image,
+                "profile_image": safe_image_url(getattr(other, "profile_image", None)),
             }
         return None
 
@@ -62,12 +83,18 @@ class ChatRoomListSerializer(serializers.ModelSerializer):
         if request and request.user.is_authenticated:
             return obj.messages.filter(is_read=False).exclude(sender=request.user).count()
         return 0
+    
+    
+class ChatRoomBookSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Book
+        fields = ["id", "title"]
 
 
 class ChatRoomDetailSerializer(serializers.ModelSerializer):
     """채팅방 상세 (메시지 포함)"""
 
-    book = BookListSerializer(read_only=True)
+    book = ChatRoomBookSerializer(read_only=True)
     buyer = serializers.SerializerMethodField()
     seller = serializers.SerializerMethodField()
     messages = MessageSerializer(many=True, read_only=True)
@@ -77,7 +104,19 @@ class ChatRoomDetailSerializer(serializers.ModelSerializer):
         fields = ["id", "book", "buyer", "seller", "messages", "created_at", "updated_at"]
 
     def get_buyer(self, obj):
-        return {"id": obj.buyer.id, "username": obj.buyer.username, "email": obj.buyer.email}
+        u = obj.buyer
+        return {
+            "id": obj.buyer.id, 
+            "username": obj.buyer.username, 
+            "email": obj.buyer.email,
+            "profile_image": safe_image_url(getattr(u, "profile_image", None)),
+        }
 
     def get_seller(self, obj):
-        return {"id": obj.seller.id, "username": obj.seller.username, "email": obj.seller.email}
+        u = obj.seller
+        return {
+            "id": obj.seller.id, 
+            "username": obj.seller.username, 
+            "email": obj.seller.email,
+            "profile_image": safe_image_url(getattr(u, "profile_image", None)),
+        }
