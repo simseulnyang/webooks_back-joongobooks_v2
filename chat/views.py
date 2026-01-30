@@ -213,15 +213,11 @@ class ChatRoomListView(APIView):
             .prefetch_related("messages")
             .order_by("-updated_at")
         )
-        
+
         paginator = BookPagination()
         paginated_rooms = paginator.paginate_queryset(chatrooms, request)
 
-        serializer = ChatRoomListSerializer(
-            paginated_rooms, 
-            many=True, 
-            context={"request": request}
-        )
+        serializer = ChatRoomListSerializer(paginated_rooms, many=True, context={"request": request})
 
         return paginator.get_paginated_response(serializer.data)
 

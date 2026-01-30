@@ -93,7 +93,7 @@ class BookDetailView(APIView):
 
         self.check_object_permissions(request, book)
 
-        serializer = BookSerializer(book)
+        serializer = BookSerializer(book, context={"request": request})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
@@ -226,10 +226,12 @@ class FavoriteListView(APIView):
         },
     )
     def get(self, request: Request) -> Response:
-        favorite = Favorite.objects.filter(user=request.user).prefetch_related("book")
+        favorites = Favorite.objects.filter(user=request.user).select_related("book").order_by("-created_at")
 
         pagination = BookPagination()
-        paginated_favorites = pagination.paginate_queryset(favorite, request)
+        paginated = pagination.paginate_queryset(favorites, request)
 
-        serializer = FavoriteSerializer(paginated_favorites, many=True)
+        serializer = FavoriteSerializer(paginated, many=True)
+
+        print("serializer data:", serializer.data)
         return pagination.get_paginated_response(serializer.data)

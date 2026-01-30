@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from accounts.models import User, SocialAccount
+from accounts.models import SocialAccount, User
 
 
 class SocialLoginSerializer(serializers.Serializer):

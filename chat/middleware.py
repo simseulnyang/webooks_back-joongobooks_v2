@@ -1,10 +1,13 @@
 import logging
+
 from django.contrib.auth.models import AnonymousUser
-from channels.middleware import BaseMiddleware
+
 from channels.db import database_sync_to_async
+from channels.middleware import BaseMiddleware
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
 logger = logging.getLogger(__name__)
+
 
 class JwtAuthMiddleware(BaseMiddleware):
     async def __call__(self, scope, receive, send):

@@ -1,5 +1,4 @@
 import logging
-from rest_framework_simplejwt.exceptions import TokenError
 
 from django.conf import settings
 from django.db import transaction
@@ -10,19 +9,19 @@ from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
-
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from .models import SocialAccount, User
 from .serializers import (
-    SocialLoginSerializer,
+    DeleteAccountSerializer,
+    LogoutSerializer,
+    MessageResponseSerializer,
     SocialLoginResponseSerializer,
+    SocialLoginSerializer,
     UserSerializer,
     UserUpdateSerializer,
-    LogoutSerializer,
-    DeleteAccountSerializer,
-    MessageResponseSerializer,
 )
 
 logger = logging.getLogger(__name__)
@@ -268,8 +267,8 @@ class GoogleLoginAPIView(APIView):
         picture = ""
 
         try:
-            from google.oauth2 import id_token as google_id_token
             from google.auth.transport import requests as google_requests
+            from google.oauth2 import id_token as google_id_token
 
             idinfo = google_id_token.verify_oauth2_token(
                 token,

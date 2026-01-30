@@ -2,9 +2,8 @@
 
 from rest_framework import serializers
 
-from books.serializers import BookListSerializer
-
 from books.models import Book
+from books.serializers import BookListSerializer
 from chat.models import ChatRoom, Message
 
 
@@ -15,13 +14,13 @@ def safe_image_url(value) -> str:
     """
     if not value:
         return ""
-    
+
     if hasattr(value, "url"):
         try:
             return value.url or ""
         except Exception:
             return ""
-    
+
     if isinstance(value, str):
         return value
 
@@ -30,7 +29,7 @@ def safe_image_url(value) -> str:
 
 class MessageSerializer(serializers.ModelSerializer):
     room = serializers.IntegerField(source="chatroom_id", read_only=True)
-    
+
     sender_username = serializers.CharField(source="sender.username", read_only=True)
     sender_email = serializers.CharField(source="sender.email", read_only=True)
 
@@ -83,8 +82,8 @@ class ChatRoomListSerializer(serializers.ModelSerializer):
         if request and request.user.is_authenticated:
             return obj.messages.filter(is_read=False).exclude(sender=request.user).count()
         return 0
-    
-    
+
+
 class ChatRoomBookSerializer(serializers.ModelSerializer):
     class Meta:
         model = Book
@@ -106,8 +105,8 @@ class ChatRoomDetailSerializer(serializers.ModelSerializer):
     def get_buyer(self, obj):
         u = obj.buyer
         return {
-            "id": obj.buyer.id, 
-            "username": obj.buyer.username, 
+            "id": obj.buyer.id,
+            "username": obj.buyer.username,
             "email": obj.buyer.email,
             "profile_image": safe_image_url(getattr(u, "profile_image", None)),
         }
@@ -115,8 +114,8 @@ class ChatRoomDetailSerializer(serializers.ModelSerializer):
     def get_seller(self, obj):
         u = obj.seller
         return {
-            "id": obj.seller.id, 
-            "username": obj.seller.username, 
+            "id": obj.seller.id,
+            "username": obj.seller.username,
             "email": obj.seller.email,
             "profile_image": safe_image_url(getattr(u, "profile_image", None)),
         }
