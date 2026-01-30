@@ -1,13 +1,14 @@
-from rest_framework_simplejwt.views import TokenRefreshView
 from django.urls import path
 
+from rest_framework_simplejwt.views import TokenRefreshView
+
 from accounts.views import (
+    DeleteAccountAPIView,
     GoogleLoginAPIView,
     KakaoLoginAPIView,
+    LogoutAPIView,
     UserProfileAPIView,
     UserUpdateAPIView,
-    LogoutAPIView,
-    DeleteAccountAPIView,
 )
 
 urlpatterns = [
@@ -17,6 +18,5 @@ urlpatterns = [
     path("update/", UserUpdateAPIView.as_view(), name="user_update"),
     path("logout/", LogoutAPIView.as_view(), name="logout"),
     path("delete/", DeleteAccountAPIView.as_view(), name="delete_account"),
-    
     path("token/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
 ]
