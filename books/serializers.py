@@ -58,14 +58,33 @@ class BookListSerializer(serializers.ModelSerializer):
 
 
 class FavoriteSerializer(serializers.ModelSerializer):
-    created_at = serializers.DateTimeField(format="%Y년 %m월 %d일", read_only=True)
-    book = BookListSerializer(read_only=True)
+    title = serializers.CharField(source="book.title", read_only=True)
+    author = serializers.CharField(source="book.author", read_only=True)
+    selling_price = serializers.IntegerField(source="book.selling_price", read_only=True)
+    book_image = serializers.ImageField(source="book.book_image", read_only=True)
+    sale_condition = serializers.CharField(source="book.sale_condition", read_only=True)
+
+    updated_at = serializers.DateTimeField(
+        source="book.updated_at",
+        format="%Y년 %m월 %d일",
+        read_only=True,
+    )
+    like_count = serializers.IntegerField(source="book.favorites.count", read_only=True)
 
     class Meta:
         model = Favorite
         fields = [
             "id",
-            "book",
-            "created_at",
+            "title",
+            "author",
+            "selling_price",
+            "book_image",
+            "sale_condition",
+            "updated_at",
+            "like_count",
         ]
-        read_only_fields = ["user"]
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["id"] = instance.book_id
+        return data
